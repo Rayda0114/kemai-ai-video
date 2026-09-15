@@ -28,6 +28,9 @@ with tempfile.TemporaryDirectory(prefix="kemai-video-check-") as tmp:
             db.execute('INSERT INTO jobs VALUES(?,?,?,?,?,?)',(job,'test',time.time(),time.time()+100,'complete',''))
         assert client.get(f'/api/jobs/{job}/video.mp4').content == b'test-output'
         assert client.get(f'/api/jobs/{job}/input.json').status_code == 404
+        assert client.get(f'/api/jobs/{job}/sources.txt').status_code == 404
+        (folder/'sources.txt').write_text('Pexels source credit')
+        assert client.get(f'/api/jobs/{job}/sources.txt').status_code == 200
         with server.connect() as db: db.execute('UPDATE jobs SET expires=? WHERE id=?',(time.time()-1,job))
         assert client.get(f'/api/jobs/{job}/video.mp4').status_code == 404
         server.SECRET='test-gateway-secret'
@@ -53,3 +56,21 @@ with tempfile.TemporaryDirectory(prefix="kemai-video-check-") as tmp:
     assert target.read_text().count('Dialogue:')==2 and '最後一句' in target.read_text()
     assert '字'*16+r'\N'+'字'*12 in target.read_text()
     print('Passed: validation, upload limits, origin, expiry, file allowlist, gateway authentication, subtitle timing and literal text.')
+
+from story import split_scenes,validate_plan,scene_durations,allowed_url
+script='清晨泡杯熱茶。翻開喜歡的書本。看著窗外慢慢享受。'
+parts=split_scenes(script)
+assert ''.join(parts)==script and 1<=len(parts)<=3
+assert ''.join(split_scenes('a\nb\nc'))=='a\nb\nc'
+assert allowed_url('https://videos.pexels.com/video-files/1/clip.mp4','video')
+for url in ['https://example.com/v.mp4','http://videos.pexels.com/v.mp4','https://videos.pexels.com:8443/a','https://x@videos.pexels.com/v.mp4']:
+    assert not allowed_url(url,'video')
+plan={'title':'測試','scenes':[{'text':p,'query':'tea book','candidates':[{'url':'https://images.pexels.com/photos/1/a.jpg','kind':'photo','page':'https://www.pexels.com/photo/1/','author':'Creator'}]} for p in parts]}
+assert validate_plan(plan,{'mode':'script','visuals':'auto','script':script})['script']==script
+try:validate_plan(plan,{'mode':'script','visuals':'auto','script':'另一段不一樣的原文。'})
+except ValueError:pass
+else:raise AssertionError('Changed user script accepted')
+lengths=scene_durations([{'text':'你好。'},{'text':'閱讀快樂。'}],[((0,1),'你好'),((1.2,4),'閱讀快樂')],4.2)
+assert lengths[0]==1 and abs(sum(lengths)-4.208333333333333)<1e-6
+assert all(t>0 for t in scene_durations([{'text':'一'},{'text':'二'},{'text':'三'}],[],1))
+print('Passed: story boundaries, preserved narration, stock allowlist, timing-aligned cuts and source download.')

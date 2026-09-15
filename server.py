@@ -44,8 +44,10 @@ def connect():
 
 class Parameters(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
-    title: str = Field(min_length=1, max_length=28)
-    script: str = Field(min_length=10, max_length=220)
+    title: str = Field(default="", max_length=28)
+    script: str = Field(min_length=2, max_length=220)
+    mode: Literal["script", "topic"] = "script"
+    visuals: Literal["upload", "auto"] = "upload"
     voice: Literal["zh-TW-HsiaoChenNeural", "zh-TW-YunJheNeural", "zh-TW-HsiaoYuNeural"] = "zh-TW-HsiaoChenNeural"
     aspect: Literal["9:16", "16:9", "1:1"] = "9:16"
     rate: Literal[0.9, 1.0, 1.1] = 1.0
@@ -56,8 +58,9 @@ def clean_parameters(fields):
     try:
         fields["rate"] = float(fields.get("rate", "1"))
         result = Parameters.model_validate(fields)
+        if result.mode=="script" and len(result.script)<10:raise ValueError()
     except (ValidationError, ValueError, TypeError):
-        raise HTTPException(422, "請填寫 1–28 字標題、10–220 字文案，並選擇有效的影片設定。")
+        raise HTTPException(422, "請提供 2–220 字主題或 10–220 字文案，標題最多 28 字，並選擇有效設定。")
     if re.search(r"[\x00-\x08\x0b-\x1f\x7f]", result.title+result.script):
         raise HTTPException(422, "文字包含無法處理的控制字元。")
     if any(c in result.script for c in "<>{}"):
@@ -192,7 +195,7 @@ def health():
 def status():
     with connect() as db:
         count = db.execute("SELECT COUNT(*) FROM jobs WHERE state IN ('queued','running')").fetchone()[0]
-        used = db.execute("SELECT COUNT(*) FROM jobs WHERE created >= ? AND state != 'failed'", (time.time()-86400,)).fetchone()[0]
+        used = db.execute("SELECT COUNT(*) FROM jobs WHERE created >= ?", (time.time()-86400,)).fetchone()[0]
     return {"available": count < 4 and used < GLOBAL_LIMIT, "busy": count, "daily_ip_limit": IP_LIMIT,
             "remaining_today": max(0, GLOBAL_LIMIT-used), "max_seconds":60, "retention_minutes":30}
 
@@ -204,17 +207,17 @@ async def create_job(request: Request):
         client = hmac.new(SALT, client_ip.encode(), hashlib.sha256).hexdigest()
         with connect() as db:
             active = db.execute("SELECT COUNT(*) FROM jobs WHERE state IN ('queued','running')").fetchone()[0]
-            recent = db.execute("SELECT client,state FROM jobs WHERE created >= ? AND state != 'failed'", (time.time()-86400,)).fetchall()
+            recent = db.execute("SELECT client,state FROM jobs WHERE created >= ?", (time.time()-86400,)).fetchall()
         if active >= 4:
             raise HTTPException(429, "目前排隊已滿，請稍後再試。")
         if len(recent) >= GLOBAL_LIMIT:
             raise HTTPException(429, "今天的免費生成名額已用完，請明天再來。")
         if sum(r["client"] == client for r in recent) >= IP_LIMIT:
-            raise HTTPException(429, f"每個網路來源 24 小時可免費製作 {IP_LIMIT} 支影片，請稍後再來。")
+            raise HTTPException(429, f"每個網路來源 24 小時可免費製作 {IP_LIMIT} 次（含未完成的製作），請稍後再來。")
         if sum(p.stat().st_size for p in DATA.rglob('*') if p.is_file()) > 450_000_000:
             raise HTTPException(503, "暫存空間使用中，請稍後再試。")
-        async with request.form(max_files=5, max_fields=6, max_part_size=4096) as form:
-            allowed_fields = {"title", "script", "voice", "aspect", "rate", "theme", "images"}
+        async with request.form(max_files=5, max_fields=8, max_part_size=4096) as form:
+            allowed_fields = {"title", "script", "voice", "aspect", "rate", "theme", "images", "mode", "visuals"}
             if any(key not in allowed_fields for key in form.keys()):
                 raise HTTPException(422, "無法辨識的影片設定。")
             fields = {k:v for k,v in form.items() if isinstance(v,str)}
@@ -222,6 +225,7 @@ async def create_job(request: Request):
             images = form.getlist("images")
             if any(isinstance(i,str) or not i.filename for i in images):
                 raise HTTPException(422, "請重新選擇圖片。")
+            if images and params.visuals=="auto":raise HTTPException(422, "請選擇自動素材或自己的圖片，不能同時提交。")
             job_id = secrets.token_hex(24)
             folder = job_path(job_id)
             folder.mkdir(mode=0o700)
@@ -268,11 +272,11 @@ def get_job(job_id: str):
 @app.get("/api/jobs/{job_id}/{filename}")
 def download(job_id: str, filename: str):
     row = job_row(job_id)
-    if row["state"] != "complete" or filename not in ("video.mp4", "subtitles.srt"):
+    if row["state"] != "complete" or filename not in ("video.mp4", "subtitles.srt", "sources.txt") or not (job_path(job_id)/filename).is_file():
         raise HTTPException(404, "檔案尚未完成或不存在。")
     return FileResponse(job_path(job_id)/filename,
                         media_type="video/mp4" if filename.endswith("mp4") else "text/plain; charset=utf-8",
-                        filename="kemai-video.mp4" if filename.endswith("mp4") else "kemai-subtitles.srt")
+                        filename="kemai-"+filename)
 
 
 app.mount("/", StaticFiles(directory=ROOT/"static", html=True), name="website")

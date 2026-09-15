@@ -7,7 +7,7 @@ from pathlib import Path
 import tarfile
 
 root=Path(__file__).resolve().parent
-paths=[root/name for name in ('server.py','render.py','requirements.txt')]
+paths=[root/name for name in ('server.py','render.py','story.py','requirements.txt')]
 paths += sorted((root/'vendor').rglob('*.py'))
 paths += [root/'vendor/moneyprinter/config.toml',root/'vendor/moneyprinter/LICENSE',root/'vendor/moneyprinter/UPSTREAM.md']
 paths += [root/'assets/NotoSansTC-Medium.ttf',root/'assets/OFL.txt']

@@ -6,6 +6,7 @@ from pathlib import Path
 import subprocess
 import sys
 import textwrap
+from story import plan_story, download_stock, scene_durations
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT / "vendor/moneyprinter"))
@@ -68,6 +69,7 @@ def readable_subtitles(maker, text, target):
         ms=round(t*1000);s,ms=divmod(ms,1000);m,s=divmod(s,60);h,m=divmod(m,60)
         return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
     target.write_text("\n\n".join(f"{i+1}\n{timestamp(a)} --> {timestamp(b)}\n{line}" for i,((a,b),line) in enumerate(groups))+"\n\n",encoding="utf-8")
+    return words
 
 
 def prepare_image(source, output, size, theme, title):
@@ -142,6 +144,12 @@ Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
 
 def render(folder):
     data = json.loads((folder / "input.json").read_text())
+    scenes=[]
+    if data.get('mode')=='topic' or data.get('visuals')=='auto':
+        progress(folder, 5, "正在理解主題、安排分鏡與搜尋素材")
+        plan=plan_story(data)
+        data.update(title=plan['title'],script=plan['script'])
+        scenes=plan['scenes']
     audio = folder / "voice.mp3"
     subtitles = folder / "subtitles.srt"
     progress(folder, 8, "正在製作中文配音")
@@ -152,24 +160,45 @@ def render(folder):
     if not 1 <= duration <= 60:
         raise ValueError("配音超過 60 秒，請縮短文案後重新製作。")
     progress(folder, 25, "正在對齊旁白與字幕")
-    readable_subtitles(maker, data["script"], subtitles)
+    words=readable_subtitles(maker, data["script"], subtitles)
     if not subtitles.is_file() or subtitles.stat().st_size == 0:
         raise RuntimeError("字幕時間無法對齊，請加入標點符號後重試。")
     size = VideoAspect(data["aspect"]).to_resolution()
     photos = [folder / f"upload-{i}" for i in range(data["image_count"])] or [None]
-    clips = []
-    clip_duration = (duration + .15) / len(photos)
-    for i, photo in enumerate(photos):
-        progress(folder, 30+int(i/len(photos)*25), f"正在處理第 {i+1} 個畫面")
-        frame = folder / f"frame-{i}.png"
-        prepare_image(photo, frame, size, data["theme"], data["title"])
+    automatic=data.get('visuals')=='auto'
+    durations=scene_durations(scenes,words,duration+.15) if automatic else [(duration+.15)/len(photos)]*len(photos)
+    clips,credits = [],[]
+    for i, clip_duration in enumerate(durations):
+        progress(folder, 30+int(i/len(durations)*30), f"正在下載與剪輯第 {i+1} 個畫面" if automatic else f"正在處理第 {i+1} 個畫面")
         clip = folder / f"clip-{i}.mp4"
-        # One FFmpeg process per image bounds RAM independently of upload count.
-        command(["ffmpeg", "-y", "-v", "error", "-threads", "1", "-loop", "1", "-i", str(frame),
-                 "-t", str(clip_duration), "-vf",
-                 f"zoompan=z='min(zoom+0.00035,1.08)':x='iw/2-iw/zoom/2':y='ih/2-ih/zoom/2':d=1:s={size[0]}x{size[1]}:fps=24",
-                 "-an", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "25",
-                 "-pix_fmt", "yuv420p", "-threads", "1", str(clip)])
+        candidates=scenes[i]['candidates'] if automatic else [None]
+        for candidate in candidates:
+            try:
+                photo=photos[i] if not automatic else None
+                if candidate:
+                    photo=folder/f"stock-{i}-{candidate['kind']}"
+                    download_stock(candidate,photo)
+                if candidate and candidate['kind']=='video':
+                    info=probe(photo)
+                    video=next((s for s in info['streams'] if s['codec_type']=='video'),{})
+                    if video.get('codec_name')!='h264' or not 0<video.get('width',0)*video.get('height',0)<=1_500_000 or not 1<=float(info['format']['duration'])<=60:
+                        raise ValueError('素材規格超過處理上限。')
+                    inputs=['-stream_loop','-1','-i',str(photo)]
+                    effect=f"scale={size[0]}:{size[1]}:force_original_aspect_ratio=increase,crop={size[0]}:{size[1]},setsar=1,fps=24"
+                else:
+                    frame=folder/f"frame-{i}.png"
+                    prepare_image(photo,frame,size,data['theme'],data['title'] or '我的影片')
+                    inputs=['-loop','1','-i',str(frame)]
+                    effect=f"zoompan=z='min(zoom+0.00035,1.08)':x='iw/2-iw/zoom/2':y='ih/2-ih/zoom/2':d=1:s={size[0]}x{size[1]}:fps=24"
+                # One native encoder per shot bounds memory on the 512 MB free host.
+                command(['ffmpeg','-y','-v','error','-threads','1',*inputs,'-t',str(clip_duration),'-vf',effect,
+                         '-an','-c:v','libx264','-preset','ultrafast','-crf','25','-pix_fmt','yuv420p','-threads','1',str(clip)])
+                if candidate:
+                    credits.append({k:candidate[k] for k in ('kind','page','author','license')})
+                break
+            except (ValueError,RuntimeError,subprocess.TimeoutExpired):
+                if not automatic:raise
+        else:raise RuntimeError(f'第 {i+1} 段素材暫時無法處理，請換個主題後重試。')
         clips.append(clip)
     manifest = folder / "clips.txt"
     manifest.write_text("\n".join(f"file '{p.name}'" for p in clips))
@@ -188,8 +217,11 @@ def render(folder):
     if not any(s["codec_type"] == "audio" for s in output["streams"]):
         raise RuntimeError("輸出音軌驗證失敗，請重試。")
     progress(folder, 100, "影片已完成，可以預覽與下載")
+    (folder/'sources.txt').write_text('客脈 AI 影片工坊\nhttps://kemai-ai-video.pages.dev/\n\n旁白\n'+data['script']+'\n\n素材來源\n'+
+        ('\n\n'.join(f"{i+1}. {s['author']} / Pexels ({s['kind']})\n{s['page']}\n{s['license']}" for i,s in enumerate(credits)) if credits else '使用者提供的圖片或內建背景。'),encoding='utf-8')
     (folder / "result.json").write_text(json.dumps({"duration": round(duration, 1),
-        "width": size[0], "height": size[1], "bytes": (folder/"video.mp4").stat().st_size}))
+        "width": size[0], "height": size[1], "bytes": (folder/"video.mp4").stat().st_size,
+        "script":data['script'],"title":data['title'],"sources":credits},ensure_ascii=False))
 
 
 if __name__ == "__main__":

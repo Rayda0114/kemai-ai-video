@@ -23,14 +23,20 @@ function showMessage(message, error = false) {
 }
 
 function updatePreview() {
+  const topic=$('mode').value==='topic', automatic=$('visuals').value==='auto';
+  $('script-label').textContent=topic?'影片主題':'旁白文案';
+  $('script').minLength=topic?2:10;
+  $('script').placeholder=topic?'例：教咖啡新手如何在家享受手沖咖啡，語氣輕鬆溫暖。':'貼上完整旁白文案，加入逗號與句號，配音會更自然。';
+  $('script-help').textContent=topic?'2–220 字，說清楚主題與重點。AI 會寫成短篇旁白並安排分鏡。':'10–220 字，保留你的原文配音；建議 60–150 字，最長 60 秒。';
+  $('manual-visuals').hidden=automatic;$('auto-help').hidden=!automatic;
   $('char-count').textContent = `${Array.from($('script').value).length} / 220 字`;
   $('preview-title').textContent = $('title').value || '把每天，\n留一點給自己。';
   const sentence = $('script').value.split(/[。！？\n]/).find(s => s.trim());
   $('preview-subtitle').textContent = sentence || '你的故事，值得被聽見。';
   $('preview-frame').dataset.theme = theme;
   $('preview-frame').dataset.aspect = aspect;
-  $('visual-preview').style.backgroundImage = images.length ? `linear-gradient(#14101d44,#14101d44), url("${images[0].url}")` : '';
-  $('preview-title').hidden = images.length > 0;
+  $('visual-preview').style.backgroundImage = !automatic && images.length ? `linear-gradient(#14101d44,#14101d44), url("${images[0].url}")` : '';
+  $('preview-title').hidden = !automatic && images.length > 0;
 }
 
 function showImages() {
@@ -94,10 +100,20 @@ async function poll(id) {
     if (job.state==='complete') {
       setBusy(false);fields.disabled=true;$('generate').disabled=true;
       $('visual-preview').hidden=true;$('result-video').hidden=false;
+      $('preview-frame').dataset.aspect=job.width===job.height?'1:1':job.width>job.height?'16:9':'9:16';
       $('result-video').src=`/api/jobs/${id}/video.mp4`;
       $('preview-badge').textContent='已完成';$('preview-caption').textContent=`${job.width} × ${job.height} · ${job.duration} 秒 · ${(job.bytes/1e6).toFixed(1)} MB`;
       $('downloads').hidden=false;$('download-video').href=`/api/jobs/${id}/video.mp4`;
       $('download-subtitles').href=`/api/jobs/${id}/subtitles.srt`;
+      $('download-sources').href=`/api/jobs/${id}/sources.txt`;
+      $('result-info').hidden=false;$('result-script').textContent=job.script||'';
+      $('source-list').replaceChildren();
+      (job.sources||[]).forEach((source,i)=>{
+        const li=document.createElement('li'), link=document.createElement('a');
+        link.textContent=`畫面 ${i+1}：${source.author} / Pexels（${source.kind==='video'?'影片':'圖片'}）`;
+        try {const url=new URL(source.page);if(url.protocol==='https:' && ['www.pexels.com','pexels.com'].includes(url.hostname))link.href=url.href;}catch{}
+        link.target='_blank';link.rel='noopener';li.append(link);$('source-list').append(li);
+      });
       $('job-detail').textContent=`請於 ${new Date(job.expires*1000).toLocaleTimeString('zh-TW',{hour:'2-digit',minute:'2-digit'})} 前下載；主機休眠或重啟可能提早清除。`;
       $('new-video').hidden=false;checkStatus();return;
     }
@@ -119,11 +135,13 @@ async function poll(id) {
 $('video-form').addEventListener('submit', async event => {
   event.preventDefault();if(busy)return;
   const title=$('title').value.trim(), script=$('script').value.trim();
-  if(!title || Array.from(title).length>28 || Array.from(script).length<10 || Array.from(script).length>220)
-    return showMessage('請填寫標題，並提供 10–220 字旁白文案。',true);
+  const mode=$('mode').value,visuals=$('visuals').value;
+  if(Array.from(title).length>28 || Array.from(script).length<(mode==='topic'?2:10) || Array.from(script).length>220)
+    return showMessage('請提供 2–220 字主題或 10–220 字旁白文案，標題最多 28 字。',true);
   const form = new FormData();
-  for(const [key,value] of Object.entries({title,script,theme,aspect,voice:$('voice').value,rate:$('rate').value})) form.append(key,value);
-  images.forEach(item=>form.append('images',item.file));
+  for(const [key,value] of Object.entries({title,script,mode,visuals,theme,aspect,voice:$('voice').value,rate:$('rate').value})) form.append(key,value);
+  if(visuals==='upload')images.forEach(item=>form.append('images',item.file));
+  $('result-info').hidden=true;
   $('downloads').hidden=true;$('new-video').hidden=true;$('job-progress').value=0;
   setBusy(true);showMessage('正在連線並提交影片，首次使用可能需要約 1 分鐘。');
   $('job-panel').focus({preventScroll:true});
@@ -141,10 +159,12 @@ $('new-video').addEventListener('click',()=>{
   clearTimeout(pollTimer);localStorage.removeItem('kemai-video-job');
   $('result-video').pause();$('result-video').removeAttribute('src');$('result-video').load();
   $('result-video').hidden=true;$('visual-preview').hidden=false;$('job-panel').hidden=true;
+  $('result-info').hidden=true;$('downloads').hidden=true;$('new-video').hidden=true;
   $('preview-badge').textContent='版面示意';$('preview-caption').textContent='畫面為排版示意；製作完成後可播放真正的影片。';
   setBusy(false);updatePreview();checkStatus();
 });
-$('example').addEventListener('click',()=>{$('title').value=example.title;$('script').value=example.script;updatePreview();});
+$('example').addEventListener('click',()=>{$('title').value=example.title;$('script').value=$('mode').value==='topic'?'忙碌上班族每天留一點時間給自己，泡茶、閱讀、欣賞窗外風景，語氣溫暖。':example.script;updatePreview();});
+for(const id of ['mode','visuals'])$(id).addEventListener('change',updatePreview);
 for (const id of ['title','script']) $(id).addEventListener('input',updatePreview);
 document.querySelectorAll('[data-theme].theme').forEach(button=>button.addEventListener('click',()=>{
   theme=button.dataset.theme;document.querySelectorAll('.theme').forEach(b=>b.setAttribute('aria-pressed',String(b===button)));updatePreview();
