@@ -1,0 +1,3 @@
+[app]
+video_codec = "libx264"
+[ui]
