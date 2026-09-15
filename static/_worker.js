@@ -15,12 +15,14 @@ export default {
     forward.set('x-kemai-proxy',env.KEMAI_PROXY_SECRET);
     forward.set('x-kemai-ip',request.headers.get('cf-connecting-ip')||'unknown');
     try {
-      const response = await fetch(upstream,{method:request.method,headers:forward,body:request.method==='POST'?request.body:undefined,redirect:'error'});
+      const response = await fetch(upstream,{method:request.method,headers:forward,body:request.method==='POST'?request.body:undefined,redirect:'manual'});
+      if (response.status>=300 && response.status<400) throw new Error('Unexpected backend redirect');
       const result = new Response(response.body,response);
       result.headers.set('Cache-Control','no-store');result.headers.set('X-Robots-Tag','noindex, nofollow');
       result.headers.set('Referrer-Policy','no-referrer');result.headers.set('X-Content-Type-Options','nosniff');
       return result;
-    } catch {
+    } catch (error) {
+      console.error('Video backend connection failed:',error.name,error.message);
       return new Response(JSON.stringify({detail:'免費影片主機正在啟動或暫時離線，請約 1 分鐘後再試。'}),{status:503,headers});
     }
   }

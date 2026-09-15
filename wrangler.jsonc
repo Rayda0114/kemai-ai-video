@@ -1,0 +1,8 @@
+{
+  "name": "kemai-ai-video",
+  "pages_build_output_dir": "./static",
+  "compatibility_date": "2026-09-15",
+  "vars": {
+    "VIDEO_BACKEND": "https://kemai-ai-video.onrender.com"
+  }
+}

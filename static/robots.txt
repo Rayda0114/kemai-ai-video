@@ -1,4 +1,5 @@
 User-agent: *
 Allow: /
 Disallow: /api/
+Disallow: /releases/
 Sitemap: https://kemai-ai-video.pages.dev/sitemap.xml

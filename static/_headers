@@ -7,3 +7,6 @@
 /api/*
   Cache-Control: no-store
   X-Robots-Tag: noindex, nofollow
+
+/releases/*
+  X-Robots-Tag: noindex, nofollow

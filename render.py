@@ -5,15 +5,17 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import textwrap
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT / "vendor/moneyprinter"))
-os.environ.setdefault("IMAGEIO_FFMPEG_EXE", "ffmpeg")
+from imageio_ffmpeg import get_ffmpeg_exe
+FFMPEG = get_ffmpeg_exe()  # Bundled FFmpeg includes libass on macOS and Linux.
 from loguru import logger
 logger.remove()  # Public jobs must not copy narration or user filenames into logs.
 from PIL import Image, ImageDraw, ImageFont, ImageOps
-from app.models.schema import VideoAspect, VideoParams
-from app.services import video, voice
+from app.models.schema import VideoAspect
+from app.services import voice
 from moviepy.video.tools.subtitles import file_to_subtitles
 logger.remove()
 
@@ -25,6 +27,7 @@ PALETTES = {"violet": ((28, 20, 51), (100, 68, 169)),
 
 
 def command(args, timeout=150):
+    if args[0] == "ffmpeg": args = [FFMPEG, *args[1:]]
     result = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                             timeout=timeout, check=False)
     if result.returncode:
@@ -64,7 +67,7 @@ def readable_subtitles(maker, text, target):
     def timestamp(t):
         ms=round(t*1000);s,ms=divmod(ms,1000);m,s=divmod(s,60);h,m=divmod(m,60)
         return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
-    target.write_text("\n\n".join(f"{i+1}\n{timestamp(a)} --> {timestamp(b)}\n{line}" for i,((a,b),line) in enumerate(groups))+"\n",encoding="utf-8")
+    target.write_text("\n\n".join(f"{i+1}\n{timestamp(a)} --> {timestamp(b)}\n{line}" for i,((a,b),line) in enumerate(groups))+"\n\n",encoding="utf-8")
 
 
 def prepare_image(source, output, size, theme, title):
@@ -76,10 +79,10 @@ def prepare_image(source, output, size, theme, title):
             if image.width * image.height > 12_000_000 or max(image.size) > 8000:
                 raise ValueError("圖片上限為 1,200 萬像素，最長邊 8,000 px。")
             image.load()
-            oriented = ImageOps.exif_transpose(image).convert("RGBA")
-            canvas = Image.new("RGBA", oriented.size, "white")
+            oriented = ImageOps.fit(ImageOps.exif_transpose(image), size, Image.Resampling.LANCZOS).convert("RGBA")
+            canvas = Image.new("RGBA", size, "white")
             canvas.alpha_composite(oriented)
-            canvas = ImageOps.fit(canvas.convert("RGB"), size, Image.Resampling.LANCZOS)
+            canvas = canvas.convert("RGB")
         shade = Image.new("RGBA", size)
         draw = ImageDraw.Draw(shade)
         draw.rectangle((0, 0, w, h), fill=(10, 10, 20, 55))
@@ -107,6 +110,34 @@ def prepare_image(source, output, size, theme, title):
         draw.multiline_text((w*.1, h*.30), "\n".join(lines), font=font,
                             fill=(250, 247, 255), spacing=16)
     canvas.save(output, "PNG")
+
+
+def native_subtitles(source, target, size):
+    """Render the upstream subtitle timings with FFmpeg instead of Python frames."""
+    w,h=size
+    # Linux font matching needs the bundled face's legacy family name.
+    font_name="Noto Sans TC Thin"  # Name ID 1; the bundled outlines use weight 500.
+    def timestamp(t):
+        seconds,cs=divmod(round(t*100),100);minutes,seconds=divmod(seconds,60);hours,minutes=divmod(minutes,60)
+        return f"{hours}:{minutes:02}:{seconds:02}.{cs:02}"
+    header=f"""[Script Info]
+ScriptType: v4.00+
+PlayResX: {w}
+PlayResY: {h}
+WrapStyle: 0
+[V4+ Styles]
+Format: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding
+Style: Default,{font_name},36,&H00FFFFFF,&H00FFFFFF,&H402B2016,&H402B2016,0,0,0,0,100,100,0,0,3,8,0,2,{round(w*.08)},{round(w*.08)},{round(h*.20)},1
+[Events]
+Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
+"""
+    lines=[]
+    for (start,end),text in file_to_subtitles(str(source),encoding="utf-8"):
+        text=textwrap.fill(text,width=max(12,int(w*.8/36)))
+        # User text stays text, including ASS control characters.
+        text=text.replace("\\","＼").replace("{","｛").replace("}","｝").replace("\n",r"\N")
+        lines.append(f"Dialogue: 0,{timestamp(start)},{timestamp(end)},Default,,0,0,0,,{text}")
+    target.write_text(header+"\n".join(lines)+"\n",encoding="utf-8")
 
 
 def render(folder):
@@ -146,16 +177,13 @@ def render(folder):
     command(["ffmpeg", "-y", "-v", "error", "-f", "concat", "-safe", "1", "-i", str(manifest),
              "-c", "copy", str(background)])
     progress(folder, 65, "正在合成 720p 影片，請保持頁面開啟")
-    params = VideoParams(video_subject=data["title"], video_aspect=data["aspect"],
-                         font_name=FONT, font_size=36, subtitle_position="custom", custom_position=76,
-                         text_fore_color="#FFFFFF", text_background_color="#161221",
-                         rounded_subtitle_background=True, stroke_width=0, bgm_type="", bgm_volume=0,
-                         n_threads=1)
-    video.fps = 24
-    video.generate_video(str(background), str(audio), str(subtitles), str(folder / "composed.mp4"), params)
-    command(["ffmpeg", "-y", "-v", "error", "-i", str(folder / "composed.mp4"),
-             "-c:v", "copy", "-c:a", "aac", "-af", "loudnorm=I=-16:TP=-1.5:LRA=11",
-             "-movflags", "+faststart", "-t", str(duration), str(folder / "video.mp4")])
+    ass=folder/"subtitles.ass"
+    native_subtitles(subtitles,ass,size)
+    command(["ffmpeg", "-y", "-v", "error", "-threads", "1", "-i", str(background), "-i", str(audio),
+             "-vf", f"ass=filename='{ass}':fontsdir='{ROOT/'assets'}'", "-map", "0:v", "-map", "1:a",
+             "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23", "-threads", "1",
+             "-c:a", "aac", "-af", "loudnorm=I=-16:TP=-1.5:LRA=11",
+             "-movflags", "+faststart", "-t", str(duration), str(folder / "video.mp4")],300)
     output = probe(folder / "video.mp4")
     if not any(s["codec_type"] == "audio" for s in output["streams"]):
         raise RuntimeError("輸出音軌驗證失敗，請重試。")

@@ -34,4 +34,22 @@ with tempfile.TemporaryDirectory(prefix="kemai-video-check-") as tmp:
         assert client.get('/api/status').status_code == 403
         assert client.get('/api/status',headers={'x-kemai-proxy':server.SECRET}).status_code == 200
         server.SECRET=''
-    print('Passed: validation, upload limits, origin, expiry, file allowlist, gateway authentication.')
+    from render import native_subtitles
+    source=Path(tmp)/'captions.srt';target=Path(tmp)/'captions.ass'
+    source.write_text('1\n00:00:59,999 --> 00:01:01,011\n測試{文字}\\N，保留內容\n\n',encoding='utf-8')
+    native_subtitles(source,target,(720,1280))
+    ass=target.read_text()
+    assert 'Style: Default,Noto Sans TC Thin,36,' in ass
+    assert 'PlayResX: 720' in ass and 'PlayResY: 1280' in ass
+    assert 'Dialogue: 0,0:01:00.00,0:01:01.01,' in ass
+    assert '測試｛文字｝＼N，保留內容' in ass
+    from render import readable_subtitles,voice
+    original_writer=voice.create_subtitle
+    try:
+        voice.create_subtitle=lambda maker,text,path,**kw: Path(path).write_text('1\n00:00:00,000 --> 00:00:03,000\n'+'字'*28+'\n\n2\n00:00:03,000 --> 00:00:04,000\n最後一句\n\n',encoding='utf-8')
+        readable_subtitles(None,'',source)
+    finally:voice.create_subtitle=original_writer
+    native_subtitles(source,target,(720,1280))
+    assert target.read_text().count('Dialogue:')==2 and '最後一句' in target.read_text()
+    assert '字'*16+r'\N'+'字'*12 in target.read_text()
+    print('Passed: validation, upload limits, origin, expiry, file allowlist, gateway authentication, subtitle timing and literal text.')

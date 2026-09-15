@@ -99,10 +99,10 @@ async function poll(id) {
       $('downloads').hidden=false;$('download-video').href=`/api/jobs/${id}/video.mp4`;
       $('download-subtitles').href=`/api/jobs/${id}/subtitles.srt`;
       $('job-detail').textContent=`請於 ${new Date(job.expires*1000).toLocaleTimeString('zh-TW',{hour:'2-digit',minute:'2-digit'})} 前下載；主機休眠或重啟可能提早清除。`;
-      $('new-video').hidden=false;return;
+      $('new-video').hidden=false;checkStatus();return;
     }
     if (job.state==='failed') throw Object.assign(new Error(job.message),{status:422});
-    $('job-detail').textContent='保持此頁開啟即可等待；不必重複按製作。';
+    $('job-detail').textContent='免費主機製作影片需要數分鐘，較長文案會更久；請保持此頁開啟，不必重複提交。';
     pollTimer=setTimeout(()=>poll(id),4000);
   } catch(error) {
     if ([404,422,403].includes(error.status)) {
@@ -130,6 +130,7 @@ $('video-form').addEventListener('submit', async event => {
   try {
     const job = await api('/api/jobs',{method:'POST',body:form},120000);
     localStorage.setItem('kemai-video-job',JSON.stringify({id:job.id,time:Date.now()}));
+    checkStatus();
     await poll(job.id);
   } catch(error) {
     setBusy(false);showMessage(error.message||'提交暫時無法完成，請稍後再試。',true);
