@@ -24,6 +24,7 @@ uvicorn server:app --host 127.0.0.1 --port 4181 --workers 1 --no-access-log
 python check.py
 python check_music.py
 node check-worker.mjs
+node check-ui.mjs
 ```
 
 `check.py` 另需 `httpx`（開發測試依賴）。瀏覽器完整驗收與影片檢查位於工作區 `work/video-studio/`；它們不是公開網站素材。

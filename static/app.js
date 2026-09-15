@@ -107,7 +107,7 @@ async function poll(id) {
     showMessage(job.message);$('job-progress').value=job.progress;
     $('processing-title').textContent=job.state==='queued'?'已排入影片隊列':'正在製作你的影片';
     if (job.state==='complete') {
-      setBusy(false);fields.disabled=true;$('generate').disabled=true;
+      setBusy(false);
       $('visual-preview').hidden=true;$('result-video').hidden=false;
       $('preview-frame').dataset.aspect=job.width===job.height?'1:1':job.width>job.height?'16:9':'9:16';
       $('result-video').src=`/api/jobs/${id}/video.mp4`;
