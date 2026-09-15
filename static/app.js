@@ -79,6 +79,15 @@ async function addFiles(files) {
 function setBusy(value) {
   busy=value;fields.disabled=value;$('generate').disabled=value;
   $('processing-cover').hidden=!value;
+  if(value)$('music-preview').pause();
+}
+
+function updateMusic() {
+  const track=$('music').value, player=$('music-preview');
+  player.pause();player.removeAttribute('src');
+  $('music-controls').hidden=track==='none';
+  if(['warm','bright','calm'].includes(track))player.src=`/music/${track}.mp3`;
+  player.load();
 }
 
 async function checkStatus() {
@@ -114,6 +123,7 @@ async function poll(id) {
         try {const url=new URL(source.page);if(url.protocol==='https:' && ['www.pexels.com','pexels.com'].includes(url.hostname))link.href=url.href;}catch{}
         link.target='_blank';link.rel='noopener';li.append(link);$('source-list').append(li);
       });
+      if(job.music_name){const li=document.createElement('li');li.textContent=`配樂：${job.music_name}`;$('source-list').append(li);}
       $('job-detail').textContent=`請於 ${new Date(job.expires*1000).toLocaleTimeString('zh-TW',{hour:'2-digit',minute:'2-digit'})} 前下載；主機休眠或重啟可能提早清除。`;
       $('new-video').hidden=false;checkStatus();return;
     }
@@ -139,7 +149,7 @@ $('video-form').addEventListener('submit', async event => {
   if(Array.from(title).length>28 || Array.from(script).length<(mode==='topic'?2:10) || Array.from(script).length>220)
     return showMessage('請提供 2–220 字主題或 10–220 字旁白文案，標題最多 28 字。',true);
   const form = new FormData();
-  for(const [key,value] of Object.entries({title,script,mode,visuals,theme,aspect,voice:$('voice').value,rate:$('rate').value})) form.append(key,value);
+  for(const [key,value] of Object.entries({title,script,mode,visuals,theme,aspect,voice:$('voice').value,rate:$('rate').value,music:$('music').value,music_volume:Number($('music-volume').value)/100})) form.append(key,value);
   if(visuals==='upload')images.forEach(item=>form.append('images',item.file));
   $('result-info').hidden=true;
   $('downloads').hidden=true;$('new-video').hidden=true;$('job-progress').value=0;
@@ -176,7 +186,11 @@ $('images').addEventListener('change',event=>addFiles([...event.target.files]));
 for(const name of ['dragover','dragenter']) $('dropzone').addEventListener(name,event=>{event.preventDefault();if(!busy)$('dropzone').classList.add('dragging');});
 for(const name of ['dragleave','drop']) $('dropzone').addEventListener(name,event=>{event.preventDefault();$('dropzone').classList.remove('dragging');});
 $('dropzone').addEventListener('drop',event=>addFiles([...event.dataTransfer.files]));
-updatePreview();checkStatus();
+$('music').addEventListener('change',updateMusic);
+$('music-volume').addEventListener('input',()=>{$('music-volume-value').textContent=`${$('music-volume').value}%`;});
+$('music-preview').addEventListener('play',()=>{if(busy)$('music-preview').pause();else $('result-video').pause();});
+$('result-video').addEventListener('play',()=>$('music-preview').pause());
+updatePreview();updateMusic();checkStatus();
 try {
   const saved=JSON.parse(localStorage.getItem('kemai-video-job')||'null');
   if(saved && /^[a-f0-9]{48}$/.test(saved.id) && Date.now()-saved.time<3600000){setBusy(true);poll(saved.id);}

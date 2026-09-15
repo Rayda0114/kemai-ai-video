@@ -52,6 +52,8 @@ class Parameters(BaseModel):
     aspect: Literal["9:16", "16:9", "1:1"] = "9:16"
     rate: Literal[0.9, 1.0, 1.1] = 1.0
     theme: Literal["violet", "forest", "sunset"] = "violet"
+    music: Literal["none", "warm", "bright", "calm"] = "none"
+    music_volume: float = Field(default=0.25, ge=0, le=0.4, allow_inf_nan=False)
 
 
 def clean_parameters(fields):
@@ -216,8 +218,8 @@ async def create_job(request: Request):
             raise HTTPException(429, f"每個網路來源 24 小時可免費製作 {IP_LIMIT} 次（含未完成的製作），請稍後再來。")
         if sum(p.stat().st_size for p in DATA.rglob('*') if p.is_file()) > 450_000_000:
             raise HTTPException(503, "暫存空間使用中，請稍後再試。")
-        async with request.form(max_files=5, max_fields=8, max_part_size=4096) as form:
-            allowed_fields = {"title", "script", "voice", "aspect", "rate", "theme", "images", "mode", "visuals"}
+        async with request.form(max_files=5, max_fields=10, max_part_size=4096) as form:
+            allowed_fields = {"title", "script", "voice", "aspect", "rate", "theme", "images", "mode", "visuals", "music", "music_volume"}
             if any(key not in allowed_fields for key in form.keys()):
                 raise HTTPException(422, "無法辨識的影片設定。")
             fields = {k:v for k,v in form.items() if isinstance(v,str)}

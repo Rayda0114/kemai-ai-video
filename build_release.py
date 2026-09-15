@@ -11,6 +11,7 @@ paths=[root/name for name in ('server.py','render.py','story.py','requirements.t
 paths += sorted((root/'vendor').rglob('*.py'))
 paths += [root/'vendor/moneyprinter/config.toml',root/'vendor/moneyprinter/LICENSE',root/'vendor/moneyprinter/UPSTREAM.md']
 paths += [root/'assets/NotoSansTC-Medium.ttf',root/'assets/OFL.txt']
+paths += [root/'static/music'/f'{track}.mp3' for track in ('warm','bright','calm')]
 paths += sorted(p for p in (root/'static').iterdir() if p.is_file() and p.suffix in ('.html','.css','.js','.svg','.txt','.xml') and not p.name.startswith('_'))
 out=root/'static/releases';out.mkdir(exist_ok=True)
 buffer=io.BytesIO()

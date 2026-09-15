@@ -7,6 +7,7 @@
 - 2–220 字主題自動寫稿；或保留 10–220 字文案、台灣中文三種配音、0.9／1／1.1 倍語速。
 - 自動素材最多 3 段；影片優先，無法處理時改用同段的相關照片，全部不可用則清楚回報失敗。畫面依旁白時間切換；提供 Pexels 創作者、素材頁及來源文字檔。
 - 自有圖片模式最多 5 張 JPG／PNG／WebP；每張 4 MB、1,200 萬像素、單邊 8,000 px。未上傳時採原創漸層背景。
+- 內建 3 種合成純音樂，可試聽與調整 0–40% 配樂音量；自動循環、淡入淡出，旁白出現時壓低配樂。預設溫暖日常／25%，API 舊請求省略配樂則保持純旁白。
 - MP4 H.264/AAC、720p、24 fps、最長 60 秒；9:16／16:9／1:1；另外下載 SRT。
 - 單一背景消費者、最多 4 個處理／排隊工作；每個網路來源 24 小時 3 次、全站 30 次；已接受的失敗工作也計次，避免反覆失敗耗盡第三方免費額度。
 - 上傳和成品完成後暫存 30 分鐘；Render 免費主機休眠或重新啟動會提早清除，配額資料也會重置。這是免費體驗容量，不是永久雲端儲存。
@@ -21,6 +22,7 @@
 ```sh
 uvicorn server:app --host 127.0.0.1 --port 4181 --workers 1 --no-access-log
 python check.py
+python check_music.py
 node check-worker.mjs
 ```
 
@@ -38,7 +40,7 @@ node check-worker.mjs
 - Pages `AI`：Wrangler 的 Workers AI binding。`/api/internal/plan` 在一般代理前驗證共用服務金鑰，只由已接受的後端工作呼叫。
 - Pexels 每段查 1 次影片、1 次照片，最多 6 次／工作，24 小時快取；不重試 429。下載只接受官方 HTTPS CDN，拒絕重新導向，影片上限 12 MB／60 秒／150 萬像素，圖片 4 MB。
 
-`python build_release.py` 只打包明列的程式、公開靜態檔與 OFL 字型；不含 runtime、使用者資料或金鑰。先部署 Pages，再核對公開檔案 SHA256。Render 的建置命令下載及驗證 manifest 所列的 bootstrap，帶 `--build` 執行；它會再驗證版本包並安裝必要依賴。啟動命令：
+`python build_release.py` 只打包明列的程式、公開靜態檔、3 首配樂與 OFL 字型；不含 runtime、使用者資料或金鑰。先部署 Pages，再核對公開檔案 SHA256。Render 的建置命令下載及驗證 manifest 所列的 bootstrap，帶 `--build` 執行；它會再驗證版本包並安裝必要依賴。啟動命令：
 
 ```sh
 cd kemai-release && OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 uvicorn server:app --host 0.0.0.0 --port $PORT --workers 1 --no-access-log
@@ -52,6 +54,7 @@ cd kemai-release && OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 uvicorn server:app 
 
 - MoneyPrinterTurbo commit `5ac2b5d979adba31f6489ba50f94f4771427549f`，MIT；授權與改動記錄在 `vendor/moneyprinter/`。
 - 原專案字型與素材未打包。使用 Google Noto Sans TC（SIL OFL），將字重固定為 500 以確保影片可讀；字型與授權在 `assets/`。
+- 配樂以 `make_music.py` 和既有 NumPy／FFmpeg 合成，未收錄外部歌曲或錄音；可用現有環境重建 `static/music/*.mp3`，不需新的 API 或付費服務。
 - 網站介面、佇列、限制、原創背景與部署整合由客脈版本新增。
 
 目前部署與驗收狀態見 [LAUNCH.md](LAUNCH.md)；Google 索引狀態與網站上線分開紀錄。

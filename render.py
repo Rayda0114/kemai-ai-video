@@ -25,6 +25,26 @@ FONT = str(ROOT / "assets/NotoSansTC-Medium.ttf")
 PALETTES = {"violet": ((28, 20, 51), (100, 68, 169)),
             "forest": ((12, 39, 37), (40, 111, 95)),
             "sunset": ((56, 27, 32), (158, 83, 69))}
+MUSIC = {"warm": "溫暖日常", "bright": "輕快步調", "calm": "安靜夜色"}
+
+
+def soundtrack(data, duration):
+    """Return extra FFmpeg inputs and the audio mapping for the final mux."""
+    track, volume = data.get('music', 'none'), float(data.get('music_volume', .25))
+    if track not in ('none', *MUSIC) or not math.isfinite(volume) or not 0 <= volume <= .4:
+        raise ValueError('請選擇有效的配樂與音量。')
+    if track == 'none' or volume == 0:
+        return [], ['-map', '1:a', '-af', 'loudnorm=I=-16:TP=-1.5:LRA=11']
+    music = ROOT / 'static/music' / f'{track}.mp3'
+    if not music.is_file(): raise RuntimeError('配樂暫時無法讀取，請選擇不加配樂後重試。')
+    graph = (
+        '[1:a]loudnorm=I=-16:TP=-1.5:LRA=11,aresample=48000,asplit[voice][side];'
+        f'[2:a]aresample=48000,volume={volume},afade=t=in:d=0.4,'
+        f'afade=t=out:st={max(0,duration-1)}:d=1[music];'
+        '[music][side]sidechaincompress=threshold=0.06:ratio=4:attack=20:release=400[bed];'
+        '[voice][bed]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,'
+        'alimiter=limit=0.84:level=false:latency=true[mix]')
+    return ['-stream_loop', '-1', '-i', str(music)], ['-filter_complex', graph, '-map', '[mix]']
 
 
 def command(args, timeout=150):
@@ -208,20 +228,22 @@ def render(folder):
     progress(folder, 65, "正在合成 720p 影片，請保持頁面開啟")
     ass=folder/"subtitles.ass"
     native_subtitles(subtitles,ass,size)
+    music_inputs, audio_options = soundtrack(data, duration)
     command(["ffmpeg", "-y", "-v", "error", "-threads", "1", "-i", str(background), "-i", str(audio),
-             "-vf", f"ass=filename='{ass}':fontsdir='{ROOT/'assets'}'", "-map", "0:v", "-map", "1:a",
+             *music_inputs, "-vf", f"ass=filename='{ass}':fontsdir='{ROOT/'assets'}'", "-map", "0:v", *audio_options,
              "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23", "-threads", "1",
-             "-c:a", "aac", "-af", "loudnorm=I=-16:TP=-1.5:LRA=11",
+             "-c:a", "aac",
              "-movflags", "+faststart", "-t", str(duration), str(folder / "video.mp4")],300)
     output = probe(folder / "video.mp4")
     if not any(s["codec_type"] == "audio" for s in output["streams"]):
         raise RuntimeError("輸出音軌驗證失敗，請重試。")
     progress(folder, 100, "影片已完成，可以預覽與下載")
-    (folder/'sources.txt').write_text('客脈 AI 影片工坊\nhttps://kemai-ai-video.pages.dev/\n\n旁白\n'+data['script']+'\n\n素材來源\n'+
+    music_name = MUSIC.get(data.get('music'), '不加配樂') if data.get('music_volume', .25) > 0 else '不加配樂'
+    (folder/'sources.txt').write_text('客脈 AI 影片工坊\nhttps://kemai-ai-video.pages.dev/\n\n配樂：'+music_name+'\n內建配樂說明：https://kemai-ai-video.pages.dev/credits.html\n\n旁白\n'+data['script']+'\n\n素材來源\n'+
         ('\n\n'.join(f"{i+1}. {s['author']} / Pexels ({s['kind']})\n{s['page']}\n{s['license']}" for i,s in enumerate(credits)) if credits else '使用者提供的圖片或內建背景。'),encoding='utf-8')
     (folder / "result.json").write_text(json.dumps({"duration": round(duration, 1),
         "width": size[0], "height": size[1], "bytes": (folder/"video.mp4").stat().st_size,
-        "script":data['script'],"title":data['title'],"sources":credits},ensure_ascii=False))
+        "script":data['script'],"title":data['title'],"sources":credits,"music_name":music_name},ensure_ascii=False))
 
 
 if __name__ == "__main__":
