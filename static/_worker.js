@@ -4,35 +4,46 @@ const safeUrl=(value,hosts)=>{
   try {const u=new URL(value);return u.protocol==='https:' && !u.username && !u.password && (!u.port || u.port==='443') && hosts.includes(u.hostname) ? u.href : null;} catch {return null;}
 };
 
-async function stockSearch(kind,query,aspect,env) {
-  const url=new URL(kind==='video'?'https://api.pexels.com/v1/videos/search':'https://api.pexels.com/v1/search');
-  url.search=new URLSearchParams({query,per_page:'12',locale:'en-US',...(aspect==='1:1'?{}:{orientation:aspect==='9:16'?'portrait':'landscape'})});
-  const key=new Request('https://kemai-ai-video.pages.dev/__stock-cache/'+kind+'?'+url.searchParams);
+async function stockSearch(kind,query,aspect,env,provider='pexels') {
+  const pixabay=provider==='pixabay', token=pixabay?env.PIXABAY_API_KEY:env.PEXELS_API_KEY;
+  if(!token)return {};
+  const url=new URL(pixabay?'https://pixabay.com/api/videos/':kind==='video'?'https://api.pexels.com/v1/videos/search':'https://api.pexels.com/v1/search');
+  url.search=new URLSearchParams(pixabay?{q:query,per_page:'12',lang:'en',safesearch:'true'}:{query,per_page:'12',locale:'en-US',...(aspect==='1:1'?{}:{orientation:aspect==='9:16'?'portrait':'landscape'})});
+  // Pixabay's credential belongs only in its upstream request, never the cache key.
+  const key=new Request('https://kemai-ai-video.pages.dev/__stock-cache/'+provider+'/'+kind+'?'+url.searchParams);
   const cache=typeof caches==='undefined'?null:caches.default;
   const hit=cache && await cache.match(key);
   if(hit)return hit.json();
-  const response=await fetch(url,{headers:{Authorization:env.PEXELS_API_KEY},redirect:'manual',signal:AbortSignal.timeout(20000)});
-  if(response.status===429)throw new Error('免費素材庫目前忙碌，請稍後再製作。');
-  if(!response.ok)throw new Error('素材庫暫時無法連線，請稍後再試。');
-  const body=await response.json();
-  if(cache)await cache.put(key,new Response(JSON.stringify(body),{headers:{'Content-Type':'application/json','Cache-Control':'public, max-age=86400'}})).catch(()=>{});
-  return body;
+  if(pixabay)url.searchParams.set('key',token);
+  try {
+    const response=await fetch(url,{headers:pixabay?{}:{Authorization:token},redirect:'manual',signal:AbortSignal.timeout(10000)});
+    if(!response.ok)return {}; // Keep the other source usable; no retries or raw error URLs.
+    const body=await response.json();
+    if(!body || typeof body!=='object')return {};
+    if(cache)await cache.put(key,new Response(JSON.stringify(body),{headers:{'Content-Type':'application/json','Cache-Control':'public, max-age=86400'}})).catch(()=>{});
+    return body;
+  } catch {return {};}
 }
 
-function chooseStock(body,kind,used) {
-  for(const item of (kind==='video'?body.videos:body.photos)||[]) {
-    const id=String(item.id), page=safeUrl(item.url,['www.pexels.com','pexels.com']);
-    if(!/^\d{1,24}$/.test(id) || used.has(kind+id) || !page)continue;
+function chooseStock(body,kind,used,provider='pexels') {
+  const pixabay=provider==='pixabay', items=pixabay?body.hits:kind==='video'?body.videos:body.photos;
+  for(const item of Array.isArray(items)?items:[]) {
+    if(!item || typeof item!=='object')continue;
+    const id=String(item.id), page=safeUrl(pixabay?item.pageURL:item.url,pixabay?['pixabay.com','www.pixabay.com']:['www.pexels.com','pexels.com']);
+    const unique=provider+kind+id;
+    if(!/^\d{1,24}$/.test(id) || used.has(unique) || !page)continue;
     let url;
     if(kind==='video') {
       if(!(item.duration>=1 && item.duration<=60))continue;
-      const files=(item.video_files||[]).filter(f=>f.file_type==='video/mp4' && f.width>=240 && f.height>=240 && f.width*f.height<=1500000 && safeUrl(f.link,['videos.pexels.com']));
+      const hosts=pixabay?['cdn.pixabay.com']:['videos.pexels.com'];
+      const versions=pixabay?Object.values(item.videos||{}).filter(f=>f && f.size>0 && f.size<=12000000).map(f=>({...f,link:f.url,file_type:'video/mp4'})):item.video_files;
+      const files=(Array.isArray(versions)?versions:[]).filter(f=>f && f.file_type==='video/mp4' && f.width>=240 && f.height>=240 && f.width*f.height<=1500000 && safeUrl(f.link,hosts));
       files.sort((a,b)=>Math.abs(a.width*a.height-921600)-Math.abs(b.width*b.height-921600));
-      url=files[0] && safeUrl(files[0].link,['videos.pexels.com']);
+      url=files[0] && safeUrl(files[0].link,hosts);
     } else url=safeUrl(item.src?.large2x || item.src?.large,['images.pexels.com']);
     if(!url)continue;
-    used.add(kind+id);
-    return {kind,id,url,page,author:String((kind==='video'?item.user?.name:item.photographer)||'Pexels creator').slice(0,100),license:'https://www.pexels.com/license/'};
+    used.add(unique);
+    return {provider,kind,id,url,page,author:String((pixabay?item.user:kind==='video'?item.user?.name:item.photographer)||(pixabay?'Pixabay creator':'Pexels creator')).slice(0,100),license:pixabay?'https://pixabay.com/service/license-summary/':'https://www.pexels.com/license/'};
   }
   return null;
 }
@@ -49,7 +60,7 @@ async function makePlan(request,env) {
   if(!['topic','script'].includes(input.mode) || !['auto','upload'].includes(input.visuals) || !['9:16','16:9','1:1'].includes(input.aspect) || typeof input.script!=='string' || input.script.length>220 || input.script.length<2)
     return reply({detail:'無法辨識影片設定。'},422);
   if(input.mode==='script' && (input.script.length<10 || !Array.isArray(input.parts) || input.parts.length<1 || input.parts.length>3 || input.parts.some(x=>typeof x!=='string') || input.parts.join('')!==input.script))return reply({detail:'分鏡文案不一致。'},422);
-  if(input.visuals==='auto' && !env.PEXELS_API_KEY)return reply({detail:'免費素材庫尚未啟用。'},503);
+  if(input.visuals==='auto' && !env.PEXELS_API_KEY && !env.PIXABAY_API_KEY)return reply({detail:'免費素材庫尚未啟用。'},503);
   try {
     const task=input.mode==='topic'
       ? 'Write a useful 20-40 second Taiwanese Mandarin narration in Traditional Chinese about the user topic. Return JSON only: {"title":"short Traditional Chinese title","scenes":[{"text":"narration sentence(s) with punctuation","query":"2-5 concrete English stock-footage search words"}]}. Use exactly 3 scenes, 80-160 Chinese characters total, at most 220 characters total. Do not invent statistics, prices, business claims or medical promises. Use distinct, relevant, filmable subjects for each query. No headings, markdown or stage directions inside narration.'
@@ -71,8 +82,9 @@ async function makePlan(request,env) {
     for(const scene of scenes) {
       scene.candidates=[];
       if(input.visuals==='auto') {
-        const video=chooseStock(await stockSearch('video',scene.query,input.aspect,env),'video',used,input.aspect);
-        const photo=chooseStock(await stockSearch('photo',scene.query,input.aspect,env),'photo',used,input.aspect);
+        const [videos,photos]=await Promise.all(['video','photo'].map(kind=>stockSearch(kind,scene.query,input.aspect,env)));
+        const video=chooseStock(videos,'video',used) || chooseStock(await stockSearch('video',scene.query,input.aspect,env,'pixabay'),'video',used,'pixabay');
+        const photo=chooseStock(photos,'photo',used);
         scene.candidates=[video,photo].filter(Boolean);
         if(!scene.candidates.length)throw new Error('有一段找不到合適素材，請改用更具體的主題或上傳自己的圖片。');
       }

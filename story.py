@@ -20,10 +20,10 @@ def split_scenes(script):
     return parts or [script]
 
 
-def allowed_url(value,kind):
+def allowed_url(value,kind,provider='pexels'):
     try:
         u=urlsplit(value)
-        host={'video':'videos.pexels.com','photo':'images.pexels.com'}[kind]
+        host={('pexels','video'):'videos.pexels.com',('pexels','photo'):'images.pexels.com',('pixabay','video'):'cdn.pixabay.com'}[(provider,kind)]
         return u.scheme=='https' and u.hostname==host and u.port in (None,443) and not u.username and not u.password
     except (ValueError,TypeError,KeyError):return False
 
@@ -43,11 +43,14 @@ def validate_plan(plan,data):
         if data.get('visuals')=='auto' and not candidates:raise ValueError('找不到合適素材，請改寫主題後重試。')
         for source in candidates:
             if not isinstance(source,dict):raise ValueError('素材清單無法使用。')
-            if not allowed_url(source.get('url'),source.get('kind')):raise ValueError('素材來源不在支援範圍。')
+            provider=source.get('provider','pexels')
+            if not allowed_url(source.get('url'),source.get('kind'),provider):raise ValueError('素材來源不在支援範圍。')
             page=urlsplit(source.get('page',''))
-            if page.scheme!='https' or page.hostname not in ('www.pexels.com','pexels.com') or page.port not in (None,443) or page.username or page.password:raise ValueError('素材來源連結無法使用。')
-            source['author']=re.sub(r'[\x00-\x1f\x7f]','',str(source.get('author') or 'Pexels creator'))[:100]
-            source['license']='https://www.pexels.com/license/'
+            hosts=('pixabay.com','www.pixabay.com') if provider=='pixabay' else ('www.pexels.com','pexels.com')
+            if page.scheme!='https' or page.hostname not in hosts or page.port not in (None,443) or page.username or page.password:raise ValueError('素材來源連結無法使用。')
+            source['provider']=provider
+            source['author']=re.sub(r'[\x00-\x1f\x7f]','',str(source.get('author') or provider.title()+' creator'))[:100]
+            source['license']='https://pixabay.com/service/license-summary/' if provider=='pixabay' else 'https://www.pexels.com/license/'
     title=plan.get('title') or data.get('title') or '我的影片'
     if not isinstance(title,str) or len(title)>28 or re.search(r'[\x00-\x1f\x7f]',title):raise ValueError('自動標題格式無法使用。')
     return {'title':title,'script':script,'scenes':scenes}
@@ -74,7 +77,7 @@ def plan_story(data):
 
 def download_stock(source,destination):
     kind=source['kind'];url=source['url']
-    if not allowed_url(url,kind):raise ValueError('不支援的素材網址。')
+    if not allowed_url(url,kind,source.get('provider','pexels')):raise ValueError('不支援的素材網址。')
     limit=12_000_000 if kind=='video' else 4_000_000
     started=time.monotonic();size=0
     try:

@@ -67,6 +67,20 @@ for url in ['https://example.com/v.mp4','http://videos.pexels.com/v.mp4','https:
     assert not allowed_url(url,'video')
 plan={'title':'測試','scenes':[{'text':p,'query':'tea book','candidates':[{'url':'https://images.pexels.com/photos/1/a.jpg','kind':'photo','page':'https://www.pexels.com/photo/1/','author':'Creator'}]} for p in parts]}
 assert validate_plan(plan,{'mode':'script','visuals':'auto','script':script})['script']==script
+assert plan['scenes'][0]['candidates'][0]['provider']=='pexels' # Older gateway plans remain valid.
+pixabay={'provider':'pixabay','kind':'video','url':'https://cdn.pixabay.com/video/1/clip.mp4','page':'https://pixabay.com/videos/id-1/','author':'Creator','license':'untrusted'}
+assert allowed_url(pixabay['url'],'video','pixabay')
+assert not allowed_url(pixabay['url'],'video','pexels')
+assert not allowed_url(pixabay['url'],'photo','pixabay')
+pixabay_plan={'title':'測試','scenes':[{'text':script,'query':'tea','candidates':[pixabay]}]}
+validate_plan(pixabay_plan,{'mode':'script','visuals':'auto','script':script})
+assert pixabay['license']=='https://pixabay.com/service/license-summary/'
+for field,value in [('provider','other'),('url','https://cdn.pixabay.com.evil.example/clip.mp4'),('url','https://cdn.pixabay.com:8443/clip.mp4'),('page','https://www.pexels.com/video/1/'),('page','https://x@pixabay.com/videos/id-1/')]:
+    original=pixabay[field];pixabay[field]=value
+    try:validate_plan(pixabay_plan,{'mode':'script','visuals':'auto','script':script})
+    except ValueError:pass
+    else:raise AssertionError('Untrusted Pixabay source accepted')
+    finally:pixabay[field]=original
 try:validate_plan(plan,{'mode':'script','visuals':'auto','script':'另一段不一樣的原文。'})
 except ValueError:pass
 else:raise AssertionError('Changed user script accepted')

@@ -214,7 +214,7 @@ def render(folder):
                 command(['ffmpeg','-y','-v','error','-threads','1',*inputs,'-t',str(clip_duration),'-vf',effect,
                          '-an','-c:v','libx264','-preset','ultrafast','-crf','25','-pix_fmt','yuv420p','-threads','1',str(clip)])
                 if candidate:
-                    credits.append({k:candidate[k] for k in ('kind','page','author','license')})
+                    credits.append({k:candidate[k] for k in ('provider','kind','page','author','license')})
                 break
             except (ValueError,RuntimeError,subprocess.TimeoutExpired):
                 if not automatic:raise
@@ -240,7 +240,7 @@ def render(folder):
     progress(folder, 100, "影片已完成，可以預覽與下載")
     music_name = MUSIC.get(data.get('music'), '不加配樂') if data.get('music_volume', .25) > 0 else '不加配樂'
     (folder/'sources.txt').write_text('客脈 AI 影片工坊\nhttps://kemai-ai-video.pages.dev/\n\n配樂：'+music_name+'\n內建配樂說明：https://kemai-ai-video.pages.dev/credits.html\n\n旁白\n'+data['script']+'\n\n素材來源\n'+
-        ('\n\n'.join(f"{i+1}. {s['author']} / Pexels ({s['kind']})\n{s['page']}\n{s['license']}" for i,s in enumerate(credits)) if credits else '使用者提供的圖片或內建背景。'),encoding='utf-8')
+        ('\n\n'.join(f"{i+1}. {s['author']} / {s['provider'].title()} ({s['kind']})\n{s['page']}\n{s['license']}" for i,s in enumerate(credits)) if credits else '使用者提供的圖片或內建背景。'),encoding='utf-8')
     (folder / "result.json").write_text(json.dumps({"duration": round(duration, 1),
         "width": size[0], "height": size[1], "bytes": (folder/"video.mp4").stat().st_size,
         "script":data['script'],"title":data['title'],"sources":credits,"music_name":music_name},ensure_ascii=False))

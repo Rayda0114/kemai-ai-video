@@ -119,8 +119,9 @@ async function poll(id) {
       $('source-list').replaceChildren();
       (job.sources||[]).forEach((source,i)=>{
         const li=document.createElement('li'), link=document.createElement('a');
-        link.textContent=`畫面 ${i+1}：${source.author} / Pexels（${source.kind==='video'?'影片':'圖片'}）`;
-        try {const url=new URL(source.page);if(url.protocol==='https:' && ['www.pexels.com','pexels.com'].includes(url.hostname))link.href=url.href;}catch{}
+        const pixabay=source.provider==='pixabay', provider=pixabay?'Pixabay':'Pexels';
+        link.textContent=`畫面 ${i+1}：${source.author} / ${provider}（${source.kind==='video'?'影片':'圖片'}）`;
+        try {const url=new URL(source.page);if(url.protocol==='https:' && !url.username && !url.password && (!url.port || url.port==='443') && (pixabay?['pixabay.com','www.pixabay.com']:['www.pexels.com','pexels.com']).includes(url.hostname))link.href=url.href;}catch{}
         link.target='_blank';link.rel='noopener';li.append(link);$('source-list').append(li);
       });
       if(job.music_name){const li=document.createElement('li');li.textContent=`配樂：${job.music_name}`;$('source-list').append(li);}
