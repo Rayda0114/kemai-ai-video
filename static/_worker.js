@@ -43,7 +43,7 @@ function chooseStock(body,kind,used,provider='pexels') {
     } else url=safeUrl(item.src?.large2x || item.src?.large,['images.pexels.com']);
     if(!url)continue;
     used.add(unique);
-    return {provider,kind,id,url,page,author:String((pixabay?item.user:kind==='video'?item.user?.name:item.photographer)||(pixabay?'Pixabay creator':'Pexels creator')).slice(0,100),license:pixabay?'https://pixabay.com/service/license-summary/':'https://www.pexels.com/license/'};
+    return {provider,kind,id,url,page,poster:pixabay?null:safeUrl(item.image || item.src?.medium,['images.pexels.com']),author:String((pixabay?item.user:kind==='video'?item.user?.name:item.photographer)||(pixabay?'Pixabay creator':'Pexels creator')).slice(0,100),license:pixabay?'https://pixabay.com/service/license-summary/':'https://www.pexels.com/license/'};
   }
   return null;
 }
@@ -85,7 +85,9 @@ async function makePlan(request,env) {
         const [videos,photos]=await Promise.all(['video','photo'].map(kind=>stockSearch(kind,scene.query,input.aspect,env)));
         const video=chooseStock(videos,'video',used) || chooseStock(await stockSearch('video',scene.query,input.aspect,env,'pixabay'),'video',used,'pixabay');
         const photo=chooseStock(photos,'photo',used);
-        scene.candidates=[video,photo].filter(Boolean);
+        // Reuse the same bounded search response; switching never calls AI again.
+        const alternative=input.preview===true && video?.provider==='pexels'?chooseStock(videos,'video',used):null;
+        scene.candidates=[video,alternative,photo].filter(Boolean);
         if(!scene.candidates.length)throw new Error('有一段找不到合適素材，請改用更具體的主題或上傳自己的圖片。');
       }
     }

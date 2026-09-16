@@ -2,7 +2,7 @@
   X-Content-Type-Options: nosniff
   Referrer-Policy: no-referrer
   X-Frame-Options: DENY
-  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; media-src 'self' blob:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'
+  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: data: https://images.pexels.com; media-src 'self' blob: https://videos.pexels.com https://cdn.pixabay.com; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'
 
 /api/*
   Cache-Control: no-store

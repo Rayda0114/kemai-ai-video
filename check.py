@@ -55,6 +55,12 @@ with tempfile.TemporaryDirectory(prefix="kemai-video-check-") as tmp:
     native_subtitles(source,target,(720,1280))
     assert target.read_text().count('Dialogue:')==2 and '最後一句' in target.read_text()
     assert '字'*16+r'\N'+'字'*12 in target.read_text()
+    try:
+        voice.create_subtitle=lambda maker,text,path,**kw: Path(path).write_text('1\n00:00:00,100 --> 00:00:01,000\n泡杯熱茶\n\n2\n00:00:01,200 --> 00:00:02,500\n翻開書本\n\n3\n00:00:02,700 --> 00:00:04,000\n看看窗外\n\n',encoding='utf-8')
+        raw=readable_subtitles(None,'泡杯熱茶，翻開書本。看看窗外。',source)
+        assert source.read_text().count(' --> ')==3,'Punctuation must keep narration from different sentences in separate captions'
+        assert len(raw)==3 and raw[-1][0][1]==4,'Scene timing still uses original word events'
+    finally:voice.create_subtitle=original_writer
     print('Passed: validation, upload limits, origin, expiry, file allowlist, gateway authentication, subtitle timing and literal text.')
 
 from story import split_scenes,validate_plan,scene_durations,allowed_url

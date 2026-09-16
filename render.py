@@ -73,6 +73,15 @@ def readable_subtitles(maker, text, target):
     if not target.is_file():
         return
     words = file_to_subtitles(str(target), encoding="utf-8")
+    # TTS removes punctuation from word events; recover breaks from the user's script.
+    position=0;breaks=[]
+    for char in text:
+        position+=char.isalnum()
+        if char in '，,。！？!?；;\n' and position:breaks.append(position)
+    spoken=sum(c.isalnum() for _,word in words for c in word)
+    # ponytail: spoken numbers can expand; use proportional word boundaries in that case.
+    breaks={round(n*spoken/max(position,1)) for n in breaks}
+    spoken_position=0
     groups, current, start, end = [], "", 0., 0.
     for (a, b), word in words:
         # Long indivisible tokens keep bounded lines; interpolate only within that token.
@@ -84,6 +93,10 @@ def readable_subtitles(maker, text, target):
                 groups.append(((start,end),current));current="";separator=""
             if not current: start=left
             current+=separator+piece;end=right
+            next_position=spoken_position+sum(c.isalnum() for c in piece)
+            if any(spoken_position < boundary <= next_position for boundary in breaks):
+                groups.append(((start,end),current));current=""
+            spoken_position=next_position
     if current: groups.append(((start,end),current))
     def timestamp(t):
         ms=round(t*1000);s,ms=divmod(ms,1000);m,s=divmod(s,60);h,m=divmod(m,60)
@@ -165,11 +178,20 @@ Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
 def render(folder):
     data = json.loads((folder / "input.json").read_text())
     scenes=[]
-    if data.get('mode')=='topic' or data.get('visuals')=='auto':
+    confirmed=(folder/'confirmed.json').is_file()
+    if confirmed:
+        plan=json.loads((folder/'confirmed.json').read_text())
+        data.update(title=plan['title'],script=plan['script'])
+        scenes=plan['scenes']
+    elif data.get('mode')=='topic' or data.get('visuals')=='auto':
         progress(folder, 5, "正在理解主題、安排分鏡與搜尋素材")
         plan=plan_story(data)
         data.update(title=plan['title'],script=plan['script'])
         scenes=plan['scenes']
+        if data.get('preview'):
+            (folder/'draft.json').write_text(json.dumps(plan,ensure_ascii=False))
+            progress(folder, 15, '分鏡已準備好，請確認旁白與畫面。')
+            return
     audio = folder / "voice.mp3"
     subtitles = folder / "subtitles.srt"
     progress(folder, 8, "正在製作中文配音")
@@ -191,10 +213,11 @@ def render(folder):
     for i, clip_duration in enumerate(durations):
         progress(folder, 30+int(i/len(durations)*30), f"正在下載與剪輯第 {i+1} 個畫面" if automatic else f"正在處理第 {i+1} 個畫面")
         clip = folder / f"clip-{i}.mp4"
-        candidates=scenes[i]['candidates'] if automatic else [None]
+        candidates=(scenes[i]['candidates'] or [None]) if automatic else [None]
         for candidate in candidates:
             try:
                 photo=photos[i] if not automatic else None
+                if confirmed and scenes[i].get('uploaded'):photo=folder/f'scene-{i}'
                 if candidate:
                     photo=folder/f"stock-{i}-{candidate['kind']}"
                     download_stock(candidate,photo)
@@ -214,9 +237,10 @@ def render(folder):
                 command(['ffmpeg','-y','-v','error','-threads','1',*inputs,'-t',str(clip_duration),'-vf',effect,
                          '-an','-c:v','libx264','-preset','ultrafast','-crf','25','-pix_fmt','yuv420p','-threads','1',str(clip)])
                 if candidate:
-                    credits.append({k:candidate[k] for k in ('provider','kind','page','author','license')})
+                    credits.append({'scene':i+1,**{k:candidate[k] for k in ('provider','kind','page','author','license')}})
                 break
             except (ValueError,RuntimeError,subprocess.TimeoutExpired):
+                if confirmed:raise RuntimeError(f'第 {i+1} 段選定素材無法處理，請換一個素材後重新製作。') from None
                 if not automatic:raise
         else:raise RuntimeError(f'第 {i+1} 段素材暫時無法處理，請換個主題後重試。')
         clips.append(clip)
@@ -239,11 +263,12 @@ def render(folder):
         raise RuntimeError("輸出音軌驗證失敗，請重試。")
     progress(folder, 100, "影片已完成，可以預覽與下載")
     music_name = MUSIC.get(data.get('music'), '不加配樂') if data.get('music_volume', .25) > 0 else '不加配樂'
+    uploaded_scenes=[i+1 for i,s in enumerate(scenes) if s.get('uploaded')]
     (folder/'sources.txt').write_text('客脈 AI 影片工坊\nhttps://kemai-ai-video.pages.dev/\n\n配樂：'+music_name+'\n內建配樂說明：https://kemai-ai-video.pages.dev/credits.html\n\n旁白\n'+data['script']+'\n\n素材來源\n'+
-        ('\n\n'.join(f"{i+1}. {s['author']} / {s['provider'].title()} ({s['kind']})\n{s['page']}\n{s['license']}" for i,s in enumerate(credits)) if credits else '使用者提供的圖片或內建背景。'),encoding='utf-8')
+        ('\n\n'.join(f"{s.get('scene',i+1)}. {s['author']} / {s['provider'].title()} ({s['kind']})\n{s['page']}\n{s['license']}" for i,s in enumerate(credits)) if credits else '使用者提供的圖片或內建背景。')+('\n\n使用者上傳圖片：分鏡 '+', '.join(map(str,uploaded_scenes)) if uploaded_scenes else ''),encoding='utf-8')
     (folder / "result.json").write_text(json.dumps({"duration": round(duration, 1),
         "width": size[0], "height": size[1], "bytes": (folder/"video.mp4").stat().st_size,
-        "script":data['script'],"title":data['title'],"sources":credits,"music_name":music_name},ensure_ascii=False))
+        "script":data['script'],"title":data['title'],"sources":credits,"uploaded_scenes":uploaded_scenes,"music_name":music_name},ensure_ascii=False))
 
 
 if __name__ == "__main__":

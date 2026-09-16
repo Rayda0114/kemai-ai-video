@@ -83,3 +83,15 @@ cache.clear();pexelsDown=true;
 result=await worker.fetch(planRequest({'x-kemai-proxy':'test-only'}),env);
 assert.equal(result.status,503);assert(!(await result.text()).includes(env.PIXABAY_API_KEY));
 console.log('Worker automatic-story checks passed');
+
+delete globalThis.caches;
+planInput.preview=true;
+globalThis.fetch=async(url,options)=>{
+  const body=await (await pexelsFetch(url,options)).json();
+  if(body.videos)body.videos.push({...body.videos[0],id:14,url:'https://www.pexels.com/video/14/'});
+  return Response.json(body);
+};
+result=await worker.fetch(planRequest({'x-kemai-proxy':'test-only'}),env);
+assert.equal(result.status,200);plan=await result.json();
+assert.deepEqual(plan.scenes[0].candidates.map(s=>s.id),['12','14','13']);
+console.log('Passed: preview offers bounded alternatives from the existing search response.');

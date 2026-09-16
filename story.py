@@ -39,7 +39,7 @@ def validate_plan(plan,data):
     for scene in scenes:
         if not isinstance(scene.get('query'),str) or len(scene['query'])>80:raise ValueError('素材關鍵字無法使用。')
         candidates=scene.get('candidates',[])
-        if not isinstance(candidates,list) or len(candidates)>2:raise ValueError('素材清單無法使用。')
+        if not isinstance(candidates,list) or len(candidates)>3:raise ValueError('素材清單無法使用。')
         if data.get('visuals')=='auto' and not candidates:raise ValueError('找不到合適素材，請改寫主題後重試。')
         for source in candidates:
             if not isinstance(source,dict):raise ValueError('素材清單無法使用。')
@@ -49,6 +49,7 @@ def validate_plan(plan,data):
             hosts=('pixabay.com','www.pixabay.com') if provider=='pixabay' else ('www.pexels.com','pexels.com')
             if page.scheme!='https' or page.hostname not in hosts or page.port not in (None,443) or page.username or page.password:raise ValueError('素材來源連結無法使用。')
             source['provider']=provider
+            if not allowed_url(source.get('poster'),'photo','pexels'):source['poster']=None
             source['author']=re.sub(r'[\x00-\x1f\x7f]','',str(source.get('author') or provider.title()+' creator'))[:100]
             source['license']='https://pixabay.com/service/license-summary/' if provider=='pixabay' else 'https://www.pexels.com/license/'
     title=plan.get('title') or data.get('title') or '我的影片'
@@ -62,6 +63,7 @@ def plan_story(data):
     secret=os.environ.get('KEMAI_PROXY_SECRET','')
     if not secret:raise RuntimeError('自動素材服務尚未設定。')
     body={k:data.get(k,default) for k,default in (('title',''),('script',''),('mode','script'),('visuals','upload'),('aspect','9:16'))}
+    body['preview']=data.get('preview') is True
     if body['mode']=='script':body['parts']=split_scenes(body['script'])
     try:
         with requests.post(origin+'/api/internal/plan',json=body,headers={'X-Kemai-Proxy':secret},timeout=(10,100),allow_redirects=False,stream=True) as response:

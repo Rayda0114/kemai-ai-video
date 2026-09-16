@@ -18,6 +18,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from PIL import Image
 from typing import Literal
 
 ROOT = Path(__file__).resolve().parent
@@ -34,6 +35,7 @@ IP_LIMIT = int(os.environ.get("DAILY_IP_LIMIT", "3"))
 GLOBAL_LIMIT = int(os.environ.get("DAILY_GLOBAL_LIMIT", "30"))
 ID = re.compile(r"^[a-f0-9]{48}$")
 upload_lock = asyncio.Semaphore(1)
+Image.MAX_IMAGE_PIXELS = 12_000_000
 
 
 def connect():
@@ -68,6 +70,37 @@ def clean_parameters(fields):
     if any(c in result.script for c in "<>{}"):
         raise HTTPException(422, "文案請使用純文字，移除標籤與大括號。")
     return result
+
+
+class SceneEdit(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    text: str = Field(min_length=1, max_length=220)
+    candidate: int | None = Field(default=None, strict=True, ge=0, le=2)
+
+
+class Confirmation(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    title: str = Field(max_length=28)
+    scenes: list[SceneEdit] = Field(min_length=1, max_length=3)
+
+
+async def save_image(image, path):
+    if isinstance(image,str) or not getattr(image,'filename',None) or Path(image.filename).suffix.lower() not in ('.jpg','.jpeg','.png','.webp'):
+        raise HTTPException(422, '只接受 JPG、PNG、WebP 圖片。')
+    size=0
+    with path.open('wb') as output:
+        while chunk := await image.read(65536):
+            size+=len(chunk)
+            if size>4_000_000:raise HTTPException(413, '每張圖片上限 4 MB。')
+            output.write(chunk)
+    try:
+        with Image.open(path) as photo:
+            if photo.format not in ('JPEG','PNG','WEBP') or getattr(photo,'n_frames',1)!=1:
+                raise ValueError()
+            if photo.width*photo.height>12_000_000 or max(photo.size)>8000:raise ValueError()
+            photo.verify()
+    except Exception:
+        raise HTTPException(422, '請使用有效的靜態圖片，上限 1,200 萬像素、最長邊 8,000 px。') from None
 
 
 def job_path(job_id):
@@ -114,6 +147,7 @@ async def consumer():
                 start_new_session=True)
             code = await asyncio.wait_for(process.wait(), JOB_TIMEOUT)
             state = "complete" if code == 0 and (folder/"video.mp4").is_file() else "failed"
+            if code == 0 and (folder/'draft.json').is_file() and not (folder/'confirmed.json').is_file():state='ready'
             if state == "failed":
                 error = "影片製作失敗，請稍後重試。"
                 if (folder/"error.json").is_file():
@@ -176,7 +210,7 @@ async def headers_and_gateway(request, call_next):
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["X-Frame-Options"] = "DENY"
-    response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; media-src 'self' blob:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
+    response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: data: https://images.pexels.com; media-src 'self' blob: https://videos.pexels.com https://cdn.pixabay.com; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
     if request.url.path.startswith("/api/"):
         response.headers["Cache-Control"] = "no-store"
         response.headers["X-Robots-Tag"] = "noindex, nofollow"
@@ -218,12 +252,14 @@ async def create_job(request: Request):
             raise HTTPException(429, f"每個網路來源 24 小時可免費製作 {IP_LIMIT} 次（含未完成的製作），請稍後再來。")
         if sum(p.stat().st_size for p in DATA.rglob('*') if p.is_file()) > 450_000_000:
             raise HTTPException(503, "暫存空間使用中，請稍後再試。")
-        async with request.form(max_files=5, max_fields=10, max_part_size=4096) as form:
-            allowed_fields = {"title", "script", "voice", "aspect", "rate", "theme", "images", "mode", "visuals", "music", "music_volume"}
+        async with request.form(max_files=5, max_fields=11, max_part_size=4096) as form:
+            allowed_fields = {"title", "script", "voice", "aspect", "rate", "theme", "images", "mode", "visuals", "music", "music_volume", "preview"}
             if any(key not in allowed_fields for key in form.keys()):
                 raise HTTPException(422, "無法辨識的影片設定。")
             fields = {k:v for k,v in form.items() if isinstance(v,str)}
+            preview=fields.pop('preview',None)
             params = clean_parameters(fields)
+            if preview is not None and (preview!='1' or params.visuals!='auto'):raise HTTPException(422, '分鏡預覽請選擇自動素材。')
             images = form.getlist("images")
             if any(isinstance(i,str) or not i.filename for i in images):
                 raise HTTPException(422, "請重新選擇圖片。")
@@ -232,18 +268,9 @@ async def create_job(request: Request):
             folder = job_path(job_id)
             folder.mkdir(mode=0o700)
             try:
-                total = 0
                 for i, image in enumerate(images):
-                    if Path(image.filename).suffix.lower() not in (".jpg", ".jpeg", ".png", ".webp"):
-                        raise HTTPException(422, "只接受 JPG、PNG、WebP 圖片。")
-                    size = 0
-                    with (folder/f"upload-{i}").open("wb") as output:
-                        while chunk := await image.read(65536):
-                            size += len(chunk); total += len(chunk)
-                            if size > 4_000_000 or total > 20_000_000:
-                                raise HTTPException(413, "每張圖片上限 4 MB、全部上限 20 MB。")
-                            output.write(chunk)
-                (folder/"input.json").write_text(json.dumps({**params.model_dump(),"image_count":len(images)},ensure_ascii=False))
+                    await save_image(image,folder/f'upload-{i}')
+                (folder/"input.json").write_text(json.dumps({**params.model_dump(),"image_count":len(images),"preview":preview=='1'},ensure_ascii=False))
                 with connect() as db:
                     db.execute("INSERT INTO jobs(id,client,created,expires,state) VALUES(?,?,?,?,?)",
                                (job_id, client, time.time(), time.time()+JOB_TIMEOUT*4+TTL, "queued"))
@@ -251,6 +278,40 @@ async def create_job(request: Request):
                 shutil.rmtree(folder, ignore_errors=True)
                 raise
     return {"id":job_id, "state":"queued"}
+
+
+@app.post('/api/jobs/{job_id}/confirm', status_code=202)
+async def confirm_job(job_id: str, request: Request):
+    # The random job ID is the existing access token. Never accept media URLs from the client.
+    async with upload_lock:
+        row=job_row(job_id);folder=job_path(job_id)
+        if row['state'] in ('queued','running','complete') and (folder/'confirmed.json').is_file():
+            return {'id':job_id,'state':row['state']}
+        if row['state']!='ready':raise HTTPException(409, '分鏡尚未完成或已經開始製作，請重新查詢。')
+        with connect() as db:
+            if db.execute("SELECT COUNT(*) FROM jobs WHERE state IN ('queued','running')").fetchone()[0]>=4:
+                raise HTTPException(429, '目前排隊已滿，分鏡仍保留，請稍後按確認。')
+        draft=json.loads((folder/'draft.json').read_text())
+        data=json.loads((folder/'input.json').read_text())
+        async with request.form(max_files=3,max_fields=1,max_part_size=4096) as form:
+            allowed={'edits',*(f'scene-{i}' for i in range(len(draft['scenes'])))}
+            if any(k not in allowed or len(form.getlist(k))!=1 for k in form):raise HTTPException(422, '無法辨識的分鏡設定。')
+            try:edits=Confirmation.model_validate_json(form.get('edits',''))
+            except (ValidationError,ValueError,TypeError):raise HTTPException(422, '請檢查每段旁白、素材選擇與標題。') from None
+            if len(edits.scenes)!=len(draft['scenes']):raise HTTPException(422, '分鏡數量不一致。')
+            params=clean_parameters({k:v for k,v in {**data,'title':edits.title,'script':''.join(s.text for s in edits.scenes),'mode':'script'}.items() if k in Parameters.model_fields})
+            scenes=[]
+            for i,(edit,scene) in enumerate(zip(edits.scenes,draft['scenes'])):
+                image=form.get(f'scene-{i}')
+                if (edit.candidate is None)!=(image is not None):raise HTTPException(422, '請為每段選擇素材或上傳一張圖片。')
+                if edit.candidate is not None and edit.candidate>=len(scene['candidates']):raise HTTPException(422, '選定素材不存在。')
+                if image is not None:await save_image(image,folder/f'scene-{i}')
+                scenes.append({**scene,'text':edit.text,'uploaded':image is not None,'candidates':[] if image is not None else [scene['candidates'][edit.candidate]]})
+            confirmed={'title':params.title or draft['title'],'script':params.script,'scenes':scenes}
+            temp=folder/'confirmed.tmp';temp.write_text(json.dumps(confirmed,ensure_ascii=False));temp.replace(folder/'confirmed.json')
+            with connect() as db:
+                db.execute("UPDATE jobs SET state='queued',error='',expires=? WHERE id=?",(time.time()+JOB_TIMEOUT*4+TTL,job_id))
+        return {'id':job_id,'state':'queued'}
 
 
 @app.get("/api/jobs/{job_id}")
@@ -261,6 +322,10 @@ def get_job(job_id: str):
               "message":"已排入隊列，輪到你時會自動開始。"}
     if row["state"] == "failed":
         result.update(message=row["error"], progress=0)
+    elif row['state']=='ready':
+        result.update(message='分鏡已準備好，請確認旁白與畫面。',progress=15,
+                      draft=json.loads((folder/'draft.json').read_text()),
+                      aspect=json.loads((folder/'input.json').read_text())['aspect'])
     elif row["state"] in ("running", "complete"):
         try:
             result.update(json.loads((folder/"progress.json").read_text()))

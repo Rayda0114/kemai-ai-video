@@ -1,7 +1,7 @@
 {
-  "release_url": "https://kemai-ai-video.pages.dev/releases/kemai-4ce7c7340c88.tar.gz",
-  "release_sha256": "4ce7c7340c88f7a2cfda7f5f149664043214e5e5daf6af4528b539a24430a2df",
+  "release_url": "https://kemai-ai-video.pages.dev/releases/kemai-dde7f794d595.tar.gz",
+  "release_sha256": "dde7f794d59571dd587a9fdd3f3e0d4739aee723c1f851371873a97b14b7c167",
   "bootstrap_url": "https://kemai-ai-video.pages.dev/releases/bootstrap-bec384de1415.py",
   "bootstrap_sha256": "bec384de141560397d21af07edf0f5575f529fc5eefd6fc0aae3897732c0c538",
-  "bytes": 5664406
+  "bytes": 5668399
 }
