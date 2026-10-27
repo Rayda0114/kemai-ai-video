@@ -8,3 +8,5 @@ python-multipart==0.0.27
 requests==2.33.1
 toml==0.10.2
 Pillow==11.3.0
+# Render eMudhra advisory: explicit patched CA bundle for outbound HTTPS.
+certifi==2026.10.23
